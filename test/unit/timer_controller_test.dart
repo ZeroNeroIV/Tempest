@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cube_timer/features/timer/controllers/timer_controller.dart';
 
@@ -17,6 +18,21 @@ void main() {
       expect(controller.phase, TimerPhase.idle);
       expect(controller.elapsedMilliseconds, 0);
       expect(controller.isRunning, false);
+    });
+
+    test('Mouse pointer down does not activate hand pad or arm timer', () {
+      controller.onPointerDown(1, PointerDeviceKind.mouse);
+      expect(controller.phase, TimerPhase.idle);
+      expect(controller.isLeftPadActive, false);
+      expect(controller.isRightPadActive, false);
+    });
+
+    test('releaseAllKeys resets active key state', () {
+      controller.onLeftHandKeyDown();
+      expect(controller.isLeftPadActive, true);
+      controller.releaseAllKeys();
+      expect(controller.isLeftPadActive, false);
+      expect(controller.phase, TimerPhase.idle);
     });
 
     test('Single finger down does not start arming', () {
@@ -80,6 +96,21 @@ void main() {
       controller.onPointerUp(2);
       expect(controller.phase, TimerPhase.idle);
       expect(controller.isRunning, false);
+    });
+
+    test('Mouse pointer down does not activate hand pad or arm timer', () {
+      controller.onPointerDown(1, PointerDeviceKind.mouse);
+      expect(controller.phase, TimerPhase.idle);
+      expect(controller.isLeftPadActive, false);
+      expect(controller.isRightPadActive, false);
+    });
+
+    test('releaseAllKeys resets active key state', () {
+      controller.onLeftHandKeyDown();
+      expect(controller.isLeftPadActive, true);
+      controller.releaseAllKeys();
+      expect(controller.isLeftPadActive, false);
+      expect(controller.phase, TimerPhase.idle);
     });
 
     test('Single pointer touch while running stops timer', () async {

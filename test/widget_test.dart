@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cube_timer/app.dart';
@@ -60,5 +61,63 @@ void main() {
     expect(find.text('User X'), findsWidgets);
     expect(find.text('LEFT HAND'), findsOneWidget);
     expect(find.text('RIGHT HAND'), findsOneWidget);
+  });
+
+  testWidgets('Typing Z, M, and Space inside ManageUsersDialog works without triggering timer', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+
+    final themeController = ThemeController(prefs);
+    final userController = UserController(prefs);
+    final profileController = ProfileController(prefs);
+    final celebrationController = CelebrationController();
+    final solveRepository = SolveRepository(prefs);
+    final solveController = SolveController(
+      repository: solveRepository,
+      celebrationController: celebrationController,
+    );
+    final timerController = TimerController();
+
+    await tester.pumpWidget(
+      CubeTimerApp(
+        themeController: themeController,
+        userController: userController,
+        profileController: profileController,
+        solveController: solveController,
+        celebrationController: celebrationController,
+        timerController: timerController,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Tap on the users management button (person icon in header)
+    final userManageButton = find.byTooltip('Manage Users');
+    expect(userManageButton, findsOneWidget);
+    await tester.tap(userManageButton);
+    await tester.pumpAndSettle();
+
+    // Verify Manage Users dialog is opened
+    expect(find.text('Manage Users'), findsOneWidget);
+
+    // Tap the edit (pencil) icon to rename user
+    final editButton = find.byIcon(Icons.edit_outlined);
+    expect(editButton, findsWidgets);
+    await tester.tap(editButton.first);
+    await tester.pumpAndSettle();
+
+    // Verify Rename User dialog is opened with TextField
+    expect(find.text('Rename User'), findsOneWidget);
+    final textField = find.byType(TextField);
+    expect(textField, findsOneWidget);
+
+    // Enter text containing 'z', 'm', and ' '
+    await tester.enterText(textField, 'Zack More ');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Zack More '), findsOneWidget);
+    // Timer should still be completely idle and pads inactive!
+    expect(timerController.phase, TimerPhase.idle);
+    expect(timerController.isLeftPadActive, false);
+    expect(timerController.isRightPadActive, false);
   });
 }

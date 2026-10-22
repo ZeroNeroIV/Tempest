@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import '../../../core/constants/app_constants.dart';
 
@@ -66,15 +68,53 @@ class TimerController extends ChangeNotifier {
         _activePointerIds.isNotEmpty;
   }
 
+  /// Checks whether an editable text field (e.g. inside a modal/dialog) has focus.
+  bool isTextInputFocused() {
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus == null || primaryFocus.context == null) return false;
+
+    final ctx = primaryFocus.context!;
+    if (ctx.widget is EditableText) return true;
+    if (ctx.findRenderObject() is RenderEditable) return true;
+    if (ctx.findAncestorStateOfType<EditableTextState>() != null) return true;
+    if (ctx.findAncestorWidgetOfExactType<EditableText>() != null) return true;
+
+    bool hasEditableChild = false;
+    ctx.visitChildElements((element) {
+      if (element.widget is EditableText) {
+        hasEditableChild = true;
+      }
+    });
+    return hasEditableChild;
+  }
+
+  /// Releases all active keyboard and pointer states.
+  void releaseAllKeys() {
+    final hadActive = _isLeftKeyDown ||
+        _isRightKeyDown ||
+        _isSpaceKeyDown ||
+        _activePointerIds.isNotEmpty;
+    _isLeftKeyDown = false;
+    _isRightKeyDown = false;
+    _isSpaceKeyDown = false;
+    _activePointerIds.clear();
+    _isCanceled = false;
+
+    if (_phase == TimerPhase.holding) {
+      _cancelArming();
+    } else if (_phase == TimerPhase.ready) {
+      _phase = TimerPhase.idle;
+      notifyListeners();
+    } else if (hadActive) {
+      notifyListeners();
+    }
+  }
+
   /// Handles hardware keyboard events for Z (left), M (right), Space, and stop keys.
   bool handleKeyEvent(KeyEvent event) {
-    // If a text field has focus (e.g., user is typing in a modal), do not intercept!
-    final primaryFocus = FocusManager.instance.primaryFocus;
-    if (primaryFocus != null && primaryFocus.context != null) {
-      final widget = primaryFocus.context!.widget;
-      if (widget is EditableText) {
-        return false;
-      }
+    // If a text input field currently has focus, never intercept keys!
+    if (isTextInputFocused()) {
+      return false;
     }
 
     final isZ = event.logicalKey == LogicalKeyboardKey.keyZ ||
@@ -177,7 +217,7 @@ class TimerController extends ChangeNotifier {
   }
 
   /// Handles incoming pointer down events (touch or mouse).
-  void onPointerDown(int pointerId) {
+  void onPointerDown(int pointerId, [PointerDeviceKind kind = PointerDeviceKind.touch]) {
     if (_phase == TimerPhase.running) {
       _stopTimer();
       return;
@@ -185,6 +225,12 @@ class TimerController extends ChangeNotifier {
 
     if (_phase == TimerPhase.stopped) {
       resetToIdle();
+      return;
+    }
+
+    // Mouse and trackpad clicks are pointing devices and do not count as physical Stackmat hands!
+    // (Physical hands on desktop/web are emulated via Z and M keys).
+    if (kind == PointerDeviceKind.mouse || kind == PointerDeviceKind.trackpad) {
       return;
     }
 

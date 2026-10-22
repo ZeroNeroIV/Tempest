@@ -46,6 +46,7 @@ class TimerScreen extends StatefulWidget {
 
 class _TimerScreenState extends State<TimerScreen> {
   final ScrambleService _scrambleService = ScrambleService();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   String _currentScramble = '';
   bool _showSidebar = false;
   bool _isFullScreen = false;
@@ -89,7 +90,30 @@ class _TimerScreenState extends State<TimerScreen> {
     super.dispose();
   }
 
+  bool _isModalOrDialogOrDrawerOpen() {
+    if (!mounted) return false;
+    final route = ModalRoute.of(context);
+    // If a dialog, modal bottom sheet, or popup is on top:
+    if (route != null && !route.isCurrent) {
+      return true;
+    }
+    // If side drawer is currently opened:
+    if (_scaffoldKey.currentState?.isEndDrawerOpen ?? false) {
+      return true;
+    }
+    if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+      return true;
+    }
+    return false;
+  }
+
   bool _onKeyEvent(KeyEvent event) {
+    // 1. If any modal, dialog, popup, or drawer is active on top, release keys and DO NOT intercept!
+    if (_isModalOrDialogOrDrawerOpen()) {
+      widget.timerController.releaseAllKeys();
+      return false;
+    }
+
     if (event is KeyDownEvent) {
       if (event.logicalKey == LogicalKeyboardKey.escape && _isFullScreen) {
         setState(() => _isFullScreen = false);
@@ -98,9 +122,18 @@ class _TimerScreenState extends State<TimerScreen> {
       if (event.logicalKey == LogicalKeyboardKey.keyF &&
           !HardwareKeyboard.instance.isControlPressed &&
           !HardwareKeyboard.instance.isMetaPressed) {
-        final focus = FocusManager.instance.primaryFocus;
-        if (focus?.context?.widget is! EditableText && widget.timerController.phase == TimerPhase.idle) {
+        if (!widget.timerController.isTextInputFocused() &&
+            widget.timerController.phase == TimerPhase.idle) {
           setState(() => _isFullScreen = !_isFullScreen);
+          return true;
+        }
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyR &&
+          !HardwareKeyboard.instance.isControlPressed &&
+          !HardwareKeyboard.instance.isMetaPressed) {
+        if (!widget.timerController.isTextInputFocused() &&
+            widget.timerController.phase == TimerPhase.idle) {
+          _refreshScramble();
           return true;
         }
       }
@@ -131,7 +164,7 @@ class _TimerScreenState extends State<TimerScreen> {
       return Scaffold(
         body: Listener(
           behavior: HitTestBehavior.translucent,
-          onPointerDown: (e) => widget.timerController.onPointerDown(e.pointer),
+          onPointerDown: (e) => widget.timerController.onPointerDown(e.pointer, e.kind),
           onPointerUp: (e) => widget.timerController.onPointerUp(e.pointer),
           onPointerCancel: (e) => widget.timerController.onPointerUp(e.pointer),
           child: Stack(
@@ -152,6 +185,7 @@ class _TimerScreenState extends State<TimerScreen> {
     }
 
     return Scaffold(
+      key: _scaffoldKey,
       endDrawer: Drawer(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         backgroundColor: isDark ? AppColors.darkNavySurface : AppColors.lightSurface,
@@ -167,7 +201,7 @@ class _TimerScreenState extends State<TimerScreen> {
       ),
       body: Listener(
         behavior: HitTestBehavior.translucent,
-        onPointerDown: (e) => widget.timerController.onPointerDown(e.pointer),
+        onPointerDown: (e) => widget.timerController.onPointerDown(e.pointer, e.kind),
         onPointerUp: (e) => widget.timerController.onPointerUp(e.pointer),
         onPointerCancel: (e) => widget.timerController.onPointerUp(e.pointer),
         child: Stack(

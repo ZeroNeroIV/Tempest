@@ -43,7 +43,7 @@ class ScrambleDisplay extends StatelessWidget {
           const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.refresh, size: 20),
-            tooltip: 'Next Scramble',
+            tooltip: 'Next Scramble (R)',
             color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
             onPressed: onRefresh,
           ),

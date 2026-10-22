@@ -62,6 +62,7 @@
 - **Cancel Start**: Lift one hand while keeping the other down to cancel the start without triggering a false clock.
 - **Instant Stop**: Tap anywhere on screen or slap any key (**`[Z]`**, **`[M]`**, **`[Space]`**) to lock your solve time immediately.
 - **Spacebar Quick Mode**: Hold **`[Space]`** to arm both hands simultaneously on desktop.
+- **Instant Scramble Refresh**: Press **`[R]`** to generate a new scramble sequence on the fly.
 - **Distraction-Free Fullscreen Mode**: Dedicated fullscreen toggle (`[F]` key or button) displaying only the high-contrast digits and Left/Right handpads (exit via **`[Esc]`**).
 
 ### 👥 Multi-User Management & Instant Switching
