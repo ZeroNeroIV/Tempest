@@ -1,0 +1,395 @@
+name: Tempest CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # ============================================================================
+  # 0. Versioning & Semver Calculation
+  # ============================================================================
+  determine-version:
+    name: Calculate Version & Semver
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.versioning.outputs.version }}
+      build_number: ${{ steps.versioning.outputs.build_number }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Semver Version
+        id: versioning
+        run: |
+          if [ -f "pubspec.yaml" ]; then
+            PUBSPEC_VER=$(grep '^version:' pubspec.yaml | head -n 1 | awk '{print $2}' | cut -d+ -f1)
+          fi
+          NEW_VERSION="${PUBSPEC_VER:-1.0.0}"
+          BUILD_NUMBER=$(( $(git rev-list --count HEAD) + 1 ))
+
+          echo "Calculated Version: $NEW_VERSION (Build: $BUILD_NUMBER)"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+
+  # ============================================================================
+  # 1. Android APK Build (ACTIVE)
+  # ============================================================================
+  build-apk:
+    name: Build Android APK
+    needs: [determine-version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Run Static Analysis
+        run: flutter analyze
+
+      - name: Run Unit & Widget Tests
+        run: flutter test
+
+      - name: Build Android Release APK
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          BUILD_NUM="${{ needs.determine-version.outputs.build_number }}"
+          flutter build apk --release --build-name=$VERSION --build-number=$BUILD_NUM
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/Tempest-$VERSION.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: dist/Tempest-*.apk
+
+  # ============================================================================
+  # 2. iOS IPA Build (ACTIVE - Unsigned IPA)
+  # ============================================================================
+  build-ipa:
+    name: Build iOS IPA
+    needs: [determine-version]
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build iOS Release (Unsigned IPA)
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          BUILD_NUM="${{ needs.determine-version.outputs.build_number }}"
+          flutter build ios --release --no-codesign --build-name=$VERSION --build-number=$BUILD_NUM
+          mkdir -p dist Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r dist/Tempest-$VERSION.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-ipa
+          path: dist/Tempest-*.ipa
+
+  # ============================================================================
+  # 3. Linux AppImage Build (ACTIVE)
+  # ============================================================================
+  build-appimage:
+    name: Build Linux AppImage
+    needs: [determine-version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout="15"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev wget
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Linux Release
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          BUILD_NUM="${{ needs.determine-version.outputs.build_number }}"
+          flutter build linux --release --build-name=$VERSION --build-number=$BUILD_NUM
+
+      - name: Package AppImage
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+
+          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps dist
+          cp -r build/linux/x64/release/bundle/* AppDir/usr/bin/
+          cp assets/icons/tempest_logo.png AppDir/tempest.png
+          cp assets/icons/tempest_logo.png AppDir/usr/share/icons/hicolor/256x256/apps/tempest.png
+
+          echo "[Desktop Entry]" > AppDir/tempest.desktop
+          echo "Name=Tempest" >> AppDir/tempest.desktop
+          echo "Exec=cube_timer" >> AppDir/tempest.desktop
+          echo "Icon=tempest" >> AppDir/tempest.desktop
+          echo "Type=Application" >> AppDir/tempest.desktop
+          echo "Categories=Utility;Game;" >> AppDir/tempest.desktop
+          cp AppDir/tempest.desktop AppDir/usr/share/applications/
+
+          echo '#!/bin/sh' > AppDir/AppRun
+          echo 'SELF=$(readlink -f "$0")' >> AppDir/AppRun
+          echo 'HERE=${SELF%/*}' >> AppDir/AppRun
+          echo 'export PATH="${HERE}/usr/bin:${PATH}"' >> AppDir/AppRun
+          echo 'export LD_LIBRARY_PATH="${HERE}/usr/bin/lib:${LD_LIBRARY_PATH}"' >> AppDir/AppRun
+          echo 'exec "${HERE}/usr/bin/cube_timer" "$@"' >> AppDir/AppRun
+          chmod +x AppDir/AppRun
+
+          ./appimagetool --appimage-extract-and-run AppDir dist/Tempest-$VERSION.AppImage
+
+      - name: Upload AppImage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-appimage
+          path: dist/Tempest-*.AppImage
+
+  # ============================================================================
+  # 4. Web App Build (ACTIVE - .zip)
+  # ============================================================================
+  build-web:
+    name: Build Web App (.zip)
+    needs: [determine-version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Web Release
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          BUILD_NUM="${{ needs.determine-version.outputs.build_number }}"
+          flutter build web --release --base-href /Tempest/ --build-name=$VERSION --build-number=$BUILD_NUM
+          mkdir -p dist
+          cd build/web
+          zip -r ../../dist/Tempest-$VERSION-web.zip .
+          cd ../..
+
+      - name: Upload Web Zip Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: dist/Tempest-*-web.zip
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  # ============================================================================
+  # 5. Windows Executable (.exe) & Installer (.msi) Build (ACTIVE)
+  # ============================================================================
+  build-windows:
+    name: Build Windows .exe & .msi
+    needs: [determine-version]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Inno Setup and WiX Toolset
+        shell: pwsh
+        run: |
+          choco install innosetup wixtoolset -y --no-progress
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Windows Desktop Release
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.determine-version.outputs.version }}"
+          $buildNum = "${{ needs.determine-version.outputs.build_number }}"
+          flutter build windows --release --build-name=$ver --build-number=$buildNum
+
+      - name: Package Windows Artifacts (.exe and .msi)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'SilentlyContinue'
+          $ver = "${{ needs.determine-version.outputs.version }}"
+          $distDir = "$PWD/dist"
+          New-Item -ItemType Directory -Force -Path $distDir
+          
+          # 1. Rename release executable
+          $releaseDir = "$PWD/build/windows/x64/runner/Release"
+          Copy-Item "$releaseDir/cube_timer.exe" "$releaseDir/Tempest.exe"
+
+          # 2. Package portable .zip containing .exe and all required DLLs
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath "$distDir/Tempest-$ver-windows.zip"
+
+          # 3. Build Setup .exe using Inno Setup
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          if (Test-Path $iscc) {
+            & $iscc /DAppVersion="$ver" /DSourceDir="$releaseDir" /DOutputDir="$distDir" /DIconFile="$PWD/windows/runner/resources/app_icon.ico" windows/installer.iss
+            if (Test-Path "$distDir/Tempest-$ver-setup.exe") {
+              Copy-Item "$distDir/Tempest-$ver-setup.exe" "$distDir/Tempest-$ver.exe"
+            }
+          }
+
+          # 4. Build .msi using WiX Toolset
+          try {
+            $wixItem = Get-ChildItem -Path "C:\Program Files (x86)\WiX*", "C:\Program Files\WiX*", "C:\Tools\wix*" -Recurse -Filter "candle.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($wixItem) {
+              $wixBin = $wixItem.DirectoryName
+              $heat = Join-Path $wixBin "heat.exe"
+              $candle = Join-Path $wixBin "candle.exe"
+              $light = Join-Path $wixBin "light.exe"
+
+              & $heat dir "$releaseDir" -cg AppFiles -gg -scom -sreg -sfrag -dr INSTALLFOLDER -out files.wxs
+              & $candle -arch x64 windows/installer.wxs files.wxs
+              & $light -sval -b "$releaseDir" installer.wixobj files.wixobj -out "$distDir/Tempest-$ver.msi"
+            }
+          } catch {
+            Write-Host "WiX packaging note: $_"
+          }
+
+          Get-ChildItem -Path $distDir
+          exit 0
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/
+          if-no-files-found: warn
+
+  # ============================================================================
+  # 6. Deploy Web App to GitHub Pages
+  # ============================================================================
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: [build-web]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ============================================================================
+  # 7. Unified Multi-Platform GitHub Release
+  # ============================================================================
+  create-release:
+    name: Publish Multi-Platform Release
+    needs: [determine-version, build-apk, build-ipa, build-appimage, build-web, build-windows]
+    if: always() && needs.determine-version.result == 'success' && needs.build-apk.result == 'success' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download All Platform Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Display Downloaded Release Assets
+        run: |
+          ls -la release-assets/
+
+      - name: Create or Update GitHub Release & Floating Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 1. Update or create the GitHub Release with all platform artifacts
+          echo "Publishing release $VERSION..."
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" release-assets/* --clobber
+          else
+            gh release create "$VERSION" release-assets/* \
+              --title "Release $VERSION" \
+              --generate-notes \
+              --latest
+          fi
+
+          # 2. Update floating 'latest' tag and release
+          echo "Updating latest tag..."
+          git tag -f latest
+          git push -f origin latest || true
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest \
+              --title "Latest Release ($VERSION)" \
+              --notes "Latest release corresponding to version $VERSION with all supported platforms. Automatically updated by CI."
+            gh release upload latest release-assets/* --clobber
+          else
+            gh release create latest release-assets/* \
+              --title "Latest Release ($VERSION)" \
+              --notes "Latest release corresponding to version $VERSION with all supported platforms. Automatically created by CI."
+          fi
